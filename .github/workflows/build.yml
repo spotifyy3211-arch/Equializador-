@@ -1,0 +1,284 @@
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Crear archivos de la app
+        run: |
+          mkdir -p www
+          cat > www/index.html <<'HTML_EOF'
+          <!DOCTYPE html>
+          <html lang="es">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <title>Música Libre</title>
+          <style>
+          :root{--bg:#f1f5f7;--card:#fff;--ink:#14212b;--mute:#5d6f7c;--line:#d5dee4;--acc:#0e7a88;--accink:#fff;--ok:#1f8a4c;--err:#b3361f;
+          box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+          @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1a21;--card:#16262f;--ink:#e8f0f4;--mute:#8da2af;--line:#2a3d48;--acc:#3cc0d0;--accink:#06222a;--ok:#4cc982;--err:#ff8a73}}
+          *{box-sizing:border-box}
+          html{scroll-padding-top:env(safe-area-inset-top,0px)}
+          body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,Roboto,"Segoe UI",sans-serif}
+          main{max-width:560px;margin:0 auto;padding:20px 16px 40px}
+          h1{font-size:26px;margin:8px 0 4px;letter-spacing:-.01em}
+          .sub{color:var(--mute);margin:0 0 20px}
+          label{display:block;font-weight:600;font-size:14px;margin:14px 0 6px}
+          input[type=text],input[type=url]{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit}
+          input:focus-visible,button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+          button{font:inherit;border:0;border-radius:10px;padding:12px 16px;background:var(--acc);color:var(--accink);font-weight:600;cursor:pointer}
+          button.ghost{background:transparent;color:var(--acc);border:1px solid var(--line)}
+          button:disabled{opacity:.5}
+          .row{display:flex;gap:8px;margin-top:10px}.row>*{flex:1}
+          details{margin-top:14px;color:var(--mute);font-size:14px}
+          summary{cursor:pointer}
+          #msg{margin:16px 0 0;padding:12px;border-radius:10px;display:none;font-size:15px}
+          #msg.err{display:block;background:color-mix(in srgb,var(--err) 14%,transparent);color:var(--err)}
+          #msg.info{display:block;background:var(--card);border:1px solid var(--line);color:var(--mute)}
+          #res{display:none;margin-top:20px}
+          .seal{display:inline-block;padding:4px 10px;border-radius:99px;border:1px solid var(--ok);color:var(--ok);font-size:13px;font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          #ttl{font-size:19px;margin:10px 0 2px}
+          .meta{color:var(--mute);font-size:14px;margin:0 0 12px}
+          ul{list-style:none;margin:0;padding:0;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+          li{display:flex;align-items:center;gap:10px;padding:11px 12px;border-bottom:1px solid var(--line)}
+          li:last-child{border-bottom:0}
+          li input{width:20px;height:20px;accent-color:var(--acc);flex:none}
+          li span.t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          li span.s{font-size:13px;color:var(--mute);flex:none}
+          li.ok span.s{color:var(--ok)}li.bad span.s{color:var(--err)}
+          .bar{height:6px;background:var(--line);border-radius:3px;margin:14px 0 0;overflow:hidden;display:none}
+          .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+          </style>
+          </head>
+          <body>
+          <main>
+            <h1>Música Libre</h1>
+            <p class="sub">Pega un enlace de Archive.org o Jamendo y descarga pistas, álbumes o playlists con licencia libre.</p>
+
+            <label for="url">Enlace</label>
+            <input id="url" type="url" inputmode="url" placeholder="https://archive.org/details/…" autocomplete="off">
+            <div class="row">
+              <button class="ghost" id="paste" type="button">Pegar</button>
+              <button id="check" type="button">Revisar enlace</button>
+            </div>
+
+            <details id="cfg">
+              <summary>Clave de Jamendo</summary>
+              <label for="cid">Client ID (gratis en devportal.jamendo.com)</label>
+              <input id="cid" type="text" autocomplete="off" spellcheck="false">
+            </details>
+
+            <p id="msg"></p>
+
+            <section id="res">
+              <span class="seal" id="seal"></span>
+              <h2 id="ttl"></h2>
+              <p class="meta" id="meta"></p>
+              <div class="row" style="margin:0 0 10px">
+                <button class="ghost" id="tog" type="button">Quitar todas</button>
+                <button id="dl" type="button">Descargar</button>
+              </div>
+              <ul id="list"></ul>
+              <div class="bar" id="bar"><i></i></div>
+            </section>
+          </main>
+
+          <script>
+          const $ = s => document.querySelector(s);
+          const store = {
+            get(k){ try{ return localStorage.getItem(k) || ''; }catch(e){ return ''; } },
+            set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+          };
+          let current = null; // { title, license, tracks:[{title,url}] }
+
+          $('#cid').value = store.get('jamendo_cid');
+          $('#cid').addEventListener('change', e => store.set('jamendo_cid', e.target.value.trim()));
+
+          function say(text, kind){ const m = $('#msg'); m.textContent = text || ''; m.className = text ? kind : ''; }
+          const safe = s => s.replace(/[\\/:*?"<>|]+/g,' ').replace(/\s+/g,' ').trim().slice(0,120) || 'pista';
+          const first = v => Array.isArray(v) ? v[0] : v;
+
+          function parse(raw){
+            let u; try{ u = new URL(raw.trim()); }catch(e){ return null; }
+            const host = u.hostname.replace(/^www\./,'');
+            if(host === 'archive.org'){
+              const m = u.pathname.match(/^\/(?:details|download)\/([^/]+)/);
+              if(m) return { src:'archive', id:decodeURIComponent(m[1]) };
+            }
+            if(host === 'jamendo.com'){
+              const m = u.pathname.match(/\/(track|album|playlist)\/(\d+)/);
+              if(m) return { src:'jamendo', kind:m[1], id:m[2] };
+            }
+            return { src:'blocked', host };
+          }
+
+          async function loadArchive(id){
+            const r = await fetch('https://archive.org/metadata/' + encodeURIComponent(id));
+            const d = await r.json();
+            if(!d || !d.metadata) throw new Error('No se encontró ese elemento en Archive.org.');
+            const lic = first(d.metadata.licenseurl);
+            if(!lic) throw new Error('Este elemento no declara una licencia libre (Creative Commons o dominio público), así que no se descarga.');
+            let mp3 = (d.files || []).filter(f => /\.mp3$/i.test(f.name));
+            const vbr = mp3.filter(f => f.format === 'VBR MP3');
+            if(vbr.length) mp3 = vbr;
+            if(!mp3.length) throw new Error('Este elemento no tiene archivos MP3.');
+            const base = 'https://archive.org/download/' + encodeURIComponent(id) + '/';
+            return {
+              title: first(d.metadata.title) || id,
+              license: lic.replace(/^https?:\/\//,'').replace(/\/$/,''),
+              tracks: mp3.map(f => ({
+                title: f.title || f.name.split('/').pop().replace(/\.mp3$/i,''),
+                url: base + f.name.split('/').map(encodeURIComponent).join('/')
+              }))
+            };
+          }
+
+          async function loadJamendo({kind,id}){
+            const cid = $('#cid').value.trim();
+            if(!cid){ $('#cfg').open = true; throw new Error('Falta tu Client ID de Jamendo. Es gratis: devportal.jamendo.com.'); }
+            store.set('jamendo_cid', cid);
+            const path = kind === 'track' ? 'tracks/' : kind === 'album' ? 'albums/tracks/' : 'playlists/tracks/';
+            const url = 'https://api.jamendo.com/v3.0/' + path + '?client_id=' + encodeURIComponent(cid) + '&format=json&limit=200&audiodlformat=mp32&id=' + id;
+            const d = await (await fetch(url)).json();
+            if(!d.headers || d.headers.status !== 'success') throw new Error((d.headers && d.headers.error_message) || 'Jamendo rechazó la consulta. Revisa tu Client ID.');
+            const results = d.results || [];
+            if(!results.length) throw new Error('No se encontró ese contenido en Jamendo.');
+            const title = results[0].name || 'Jamendo';
+            const items = kind === 'track' ? results : results.flatMap(x => x.tracks || []);
+            const ok = items.filter(t => t.audiodownload_allowed && t.audiodownload);
+            if(!ok.length) throw new Error('Ninguna pista de este enlace tiene la descarga habilitada por el artista.');
+            const skipped = items.length - ok.length;
+            return {
+              title,
+              license: 'Creative Commons (Jamendo)',
+              note: skipped ? skipped + ' pista(s) omitida(s): el artista no permite descargarlas.' : '',
+              tracks: ok.map(t => ({ title: t.name, url: t.audiodownload }))
+            };
+          }
+
+          function render(data){
+            current = data;
+            $('#seal').textContent = 'Licencia: ' + data.license;
+            $('#ttl').textContent = data.title;
+            $('#meta').textContent = data.tracks.length + (data.tracks.length === 1 ? ' pista' : ' pistas') + (data.note ? ' · ' + data.note : '');
+            $('#list').innerHTML = '';
+            data.tracks.forEach((t,i) => {
+              const li = document.createElement('li');
+              li.innerHTML = '<input type="checkbox" checked aria-label="Incluir pista"><span class="t"></span><span class="s"></span>';
+              li.querySelector('.t').textContent = t.title;
+              li.dataset.i = i;
+              $('#list').appendChild(li);
+            });
+            $('#tog').textContent = 'Quitar todas';
+            $('#res').style.display = 'block';
+          }
+
+          $('#paste').onclick = async () => {
+            try{ $('#url').value = await navigator.clipboard.readText(); }
+            catch(e){ say('No pude leer el portapapeles. Pega el enlace manualmente.', 'info'); }
+          };
+
+          $('#check').onclick = async () => {
+            $('#res').style.display = 'none'; current = null;
+            const p = parse($('#url').value);
+            if(!p){ say('Eso no parece un enlace válido.', 'err'); return; }
+            if(p.src === 'blocked'){ say('Esta fuente no es compatible (' + p.host + '). Solo funcionan Archive.org y Jamendo, porque permiten descargar contenido con licencia libre.', 'err'); return; }
+            say('Revisando…', 'info'); $('#check').disabled = true;
+            try{
+              const data = p.src === 'archive' ? await loadArchive(p.id) : await loadJamendo(p);
+              say(''); render(data);
+            }catch(e){ say(e.message || 'No se pudo leer el enlace. Revisa tu conexión.', 'err'); }
+            $('#check').disabled = false;
+          };
+
+          $('#tog').onclick = () => {
+            const boxes = [...document.querySelectorAll('#list input')];
+            const any = boxes.some(b => b.checked);
+            boxes.forEach(b => b.checked = !any);
+            $('#tog').textContent = any ? 'Marcar todas' : 'Quitar todas';
+          };
+
+          $('#dl').onclick = async () => {
+            if(!current) return;
+            const rows = [...document.querySelectorAll('#list li')].filter(li => li.querySelector('input').checked);
+            if(!rows.length){ say('Marca al menos una pista.', 'info'); return; }
+            say(''); $('#dl').disabled = true; $('#check').disabled = true;
+            const bar = $('#bar'); bar.style.display = 'block';
+            const FS = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
+            if(FS){ try{ await FS.requestPermissions(); }catch(e){} }
+            const folder = 'MusicaLibre/' + safe(current.title);
+            let done = 0, failed = 0;
+            for(const li of rows){
+              const t = current.tracks[+li.dataset.i];
+              const st = li.querySelector('.s');
+              li.className = ''; st.textContent = 'Descargando…';
+              const name = safe(String(+li.dataset.i + 1).padStart(2,'0') + ' ' + t.title) + '.mp3';
+              try{
+                if(FS){
+                  await FS.downloadFile({ url:t.url, path:folder + '/' + name, directory:'DOCUMENTS', recursive:true });
+                }else{
+                  const a = document.createElement('a'); a.href = t.url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+                }
+                li.className = 'ok'; st.textContent = 'Listo'; done++;
+              }catch(e){
+                li.className = 'bad'; st.textContent = 'Error'; failed++;
+              }
+              bar.firstElementChild.style.width = Math.round((done + failed) / rows.length * 100) + '%';
+            }
+            say(done + ' descargada(s)' + (failed ? ', ' + failed + ' con error' : '') + (FS ? '. Están en Documentos/' + folder + '.' : '.'), failed ? 'err' : 'info');
+            $('#dl').disabled = false; $('#check').disabled = false;
+          };
+          </script>
+          </body>
+          </html>
+          HTML_EOF
+          cat > package.json <<'PKG_EOF'
+          {
+            "name": "musica-libre",
+            "version": "1.0.0",
+            "private": true,
+            "dependencies": {
+              "@capacitor/android": "^6.0.0",
+              "@capacitor/core": "^6.0.0",
+              "@capacitor/filesystem": "^6.0.0"
+            },
+            "devDependencies": { "@capacitor/cli": "^6.0.0" }
+          }
+          PKG_EOF
+          cat > capacitor.config.json <<'CFG_EOF'
+          {
+            "appId": "com.ejemplo.musicalibre",
+            "appName": "Música Libre",
+            "webDir": "www",
+            "plugins": { "CapacitorHttp": { "enabled": true } }
+          }
+          CFG_EOF
+
+      - name: Instalar dependencias
+        run: npm install
+      - name: Crear proyecto Android
+        run: |
+          npx cap add android
+          sed -i 's#<application#<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <application#' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+      - name: Compilar APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: musica-libre-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
