@@ -1,0 +1,2 @@
+# Equializador-
+Equializador para Android 
